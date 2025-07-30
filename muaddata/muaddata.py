@@ -231,8 +231,11 @@ class MuadDataViewer:
         if out_path:
             self.rgb_figure.savefig(out_path, dpi=300, bbox_inches='tight')
 
-if __name__ == '__main__':
+def main():
     root = tk.Tk()
     root.geometry("1100x700")
     app = MuadDataViewer(root)
     root.mainloop()
+
+if __name__ == '__main__':
+    main()
