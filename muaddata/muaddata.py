@@ -23,6 +23,7 @@ class MuadDataViewer:
         self.scale_length = tk.DoubleVar(value=50)
         self.single_file_label = None  # For displaying loaded file info
         self.single_file_name = None   # Store loaded file name
+        self._single_colorbar = None   # Store the colorbar object for removal
 
         # RGB Overlay state
         self.rgb_data = {'R': None, 'G': None, 'B': None}
@@ -141,10 +142,15 @@ class MuadDataViewer:
             df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(axis=1, how='all')
             mat = df.to_numpy()
             self.single_matrix = mat
-            self.single_min.set(np.nanmin(mat))
-            self.single_max.set(np.nanmax(mat))
-            self.min_slider.config(from_=self.single_min.get(), to=self.single_max.get())
-            self.max_slider.config(from_=self.single_min.get(), to=self.single_max.get())
+            # Update min/max values and sliders
+            min_val = np.nanmin(mat)
+            max_val = np.nanmax(mat)
+            self.single_min.set(min_val)
+            self.single_max.set(max_val)
+            self.min_slider.config(from_=min_val, to=max_val)
+            self.max_slider.config(from_=min_val, to=max_val)
+            self.min_slider.set(min_val)
+            self.max_slider.set(max_val)
             # Update loaded file label
             self.single_file_name = os.path.basename(path)
             self.single_file_label.config(text=f"Loaded file: {self.single_file_name}")
@@ -159,13 +165,21 @@ class MuadDataViewer:
             return
         mat = np.array(self.single_matrix, dtype=float)
         mat[np.isnan(mat)] = 0
+        # Update min/max values from sliders in case they changed
         vmin = self.single_min.get()
         vmax = self.single_max.get()
         self.single_ax.clear()
         im = self.single_ax.imshow(mat, cmap=self.single_colormap.get(), vmin=vmin, vmax=vmax)
         self.single_ax.axis('off')
+        # Remove previous colorbar if it exists
+        if hasattr(self, '_single_colorbar') and self._single_colorbar is not None:
+            try:
+                self._single_colorbar.remove()
+            except Exception:
+                pass
+            self._single_colorbar = None
         if self.show_colorbar.get():
-            self.single_figure.colorbar(im, ax=self.single_ax, fraction=0.046, pad=0.04, label="Intensity")
+            self._single_colorbar = self.single_figure.colorbar(im, ax=self.single_ax, fraction=0.046, pad=0.04, label="Intensity")
         if self.show_scalebar.get():
             bar_length = self.scale_length.get() / self.pixel_size.get()
             x = 5
