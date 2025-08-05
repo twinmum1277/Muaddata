@@ -21,6 +21,8 @@ class MuadDataViewer:
         self.show_scalebar = tk.IntVar()
         self.pixel_size = tk.DoubleVar(value=1.0)
         self.scale_length = tk.DoubleVar(value=50)
+        self.single_file_label = None  # For displaying loaded file info
+        self.single_file_name = None   # Store loaded file name
 
         # RGB Overlay state
         self.rgb_data = {'R': None, 'G': None, 'B': None}
@@ -58,10 +60,16 @@ class MuadDataViewer:
         tk.Label(control_frame, text="Min Value", font=("Arial", 13)).pack()
         self.min_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_min, font=("Arial", 13))
         self.min_slider.pack(fill=tk.X)
+        # Update plot when min slider is changed
+        self.min_slider.bind("<ButtonRelease-1>", lambda e: self.view_single_map())
+        self.min_slider.bind("<B1-Motion>", lambda e: self.view_single_map())
 
         tk.Label(control_frame, text="Max Value", font=("Arial", 13)).pack()
         self.max_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, variable=self.single_max, font=("Arial", 13))
         self.max_slider.pack(fill=tk.X)
+        # Update plot when max slider is changed
+        self.max_slider.bind("<ButtonRelease-1>", lambda e: self.view_single_map())
+        self.max_slider.bind("<B1-Motion>", lambda e: self.view_single_map())
 
         tk.Checkbutton(control_frame, text="Show Color Bar", variable=self.show_colorbar, font=("Arial", 13)).pack(anchor='w')
         tk.Checkbutton(control_frame, text="Show Scale Bar", variable=self.show_scalebar, font=("Arial", 13)).pack(anchor='w')
@@ -74,6 +82,10 @@ class MuadDataViewer:
 
         tk.Button(control_frame, text="View Map", command=self.view_single_map, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
         tk.Button(control_frame, text="Save PNG", command=self.save_single_image, font=("Arial", 13)).pack(fill=tk.X)
+
+        # Add a label at the bottom left to display loaded file info
+        self.single_file_label = tk.Label(control_frame, text="Loaded file: None", font=("Arial", 11, "italic"), anchor="w", justify="left", wraplength=200)
+        self.single_file_label.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
 
         self.single_figure, self.single_ax = plt.subplots()
         self.single_ax.axis('off')
@@ -133,8 +145,14 @@ class MuadDataViewer:
             self.single_max.set(np.nanmax(mat))
             self.min_slider.config(from_=self.single_min.get(), to=self.single_max.get())
             self.max_slider.config(from_=self.single_min.get(), to=self.single_max.get())
+            # Update loaded file label
+            self.single_file_name = os.path.basename(path)
+            self.single_file_label.config(text=f"Loaded file: {self.single_file_name}")
+            self.view_single_map()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load matrix file:\n{e}")
+            self.single_file_label.config(text="Loaded file: None")
+            self.single_file_name = None
 
     def view_single_map(self):
         if self.single_matrix is None:

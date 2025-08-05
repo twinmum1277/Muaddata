@@ -3,7 +3,7 @@ Fully Functional Element Viewer + RGB Overlay
 
 To install:
 ```{bash}
-pip install git+https://github.com/twinmum1277/muaddata
+pip install git+https://github.com/twinmum1277/muaddata 
 ```
 
 Or from PyPI:
