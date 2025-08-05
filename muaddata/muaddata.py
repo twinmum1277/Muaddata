@@ -1,6 +1,6 @@
 # Muad'Data v17 - Fully Functional Element Viewer + RGB Overlay Tabs
 import tkinter as tk
-from tkinter import filedialog, ttk, messagebox
+from tkinter import filedialog, ttk, messagebox, colorchooser
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -29,6 +29,9 @@ class MuadDataViewer:
         self.rgb_data = {'R': None, 'G': None, 'B': None}
         self.rgb_sliders = {}
         self.rgb_labels = {}
+        self.rgb_colors = {'R': '#ff0000', 'G': '#00ff00', 'B': '#0000ff'}  # Default colors
+        self.rgb_color_buttons = {}
+        self.rgb_gradient_canvases = {}
         self.file_root_label = None
         self.normalize_var = tk.IntVar()
 
@@ -103,14 +106,26 @@ class MuadDataViewer:
         self.file_root_label = tk.Label(control_frame, text="Dataset: None", font=("Arial", 13, "italic"))
         self.file_root_label.pack(pady=(0, 10))
 
-        for color in ['Red', 'Green', 'Blue']:
-            ch = color[0]
+        color_names = {'R': 'Red', 'G': 'Green', 'B': 'Blue'}
+        default_colors = {'R': '#ff0000', 'G': '#00ff00', 'B': '#0000ff'}
+
+        for ch in ['R', 'G', 'B']:
+            color = color_names[ch]
             tk.Button(control_frame, text=f"Load {color} Channel", command=lambda c=ch: self.load_rgb_file(c), font=("Arial", 13)).pack(fill=tk.X, pady=(6, 2))
             elem_label = tk.Label(control_frame, text=f"Loaded Element: None", font=("Arial", 13, "italic"))
             elem_label.pack()
-            gradient_canvas = tk.Canvas(control_frame, height=10)
-            gradient_canvas.pack(fill=tk.X, padx=5, pady=2)
-            self.draw_gradient(gradient_canvas, color.lower())
+            # Color picker and gradient
+            color_picker_frame = tk.Frame(control_frame)
+            color_picker_frame.pack(fill=tk.X, padx=5, pady=2)
+            color_btn = tk.Button(color_picker_frame, text="Pick Color", bg=self.rgb_colors[ch], fg='white', font=("Arial", 10, "bold"),
+                                  command=lambda c=ch: self.pick_channel_color(c))
+            color_btn.pack(side=tk.LEFT, padx=(0, 5))
+            gradient_canvas = tk.Canvas(color_picker_frame, height=10, width=256)
+            gradient_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            self.draw_gradient(gradient_canvas, self.rgb_colors[ch])
+            self.rgb_color_buttons[ch] = color_btn
+            self.rgb_gradient_canvases[ch] = gradient_canvas
+
             max_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, label=f"{color} Max", font=("Arial", 13))
             max_slider.set(1)
             max_slider.pack(fill=tk.X)
@@ -127,11 +142,40 @@ class MuadDataViewer:
         self.rgb_canvas = FigureCanvasTkAgg(self.rgb_figure, master=display_frame)
         self.rgb_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
+    def pick_channel_color(self, channel):
+        # Open color chooser and update color for the channel
+        initial_color = self.rgb_colors[channel]
+        color_code = colorchooser.askcolor(title=f"Pick color for channel {channel}", color=initial_color)
+        if color_code and color_code[1]:
+            self.rgb_colors[channel] = color_code[1]
+            # Update button color
+            self.rgb_color_buttons[channel].configure(bg=color_code[1])
+            # Redraw gradient
+            self.draw_gradient(self.rgb_gradient_canvases[channel], color_code[1])
+            # Update overlay if visible
+            self.view_rgb_overlay()
+
     def draw_gradient(self, canvas, color):
+        # Accepts either a color name ('red', 'green', 'blue') or a hex color
         canvas.delete("all")
-        for i in range(256):
-            c = {'red': f'#{i:02x}0000', 'green': f'#00{i:02x}00', 'blue': f'#0000{i:02x}'}[color]
-            canvas.create_line(i, 0, i, 10, fill=c)
+        # If color is a hex string, interpolate from black to that color
+        if isinstance(color, str) and color.startswith('#') and len(color) == 7:
+            # Get RGB values
+            r = int(color[1:3], 16)
+            g = int(color[3:5], 16)
+            b = int(color[5:7], 16)
+            for i in range(256):
+                frac = i / 255.0
+                rr = int(r * frac)
+                gg = int(g * frac)
+                bb = int(b * frac)
+                c = f'#{rr:02x}{gg:02x}{bb:02x}'
+                canvas.create_line(i, 0, i, 10, fill=c)
+        else:
+            # Fallback to old behavior for 'red', 'green', 'blue'
+            for i in range(256):
+                c = {'red': f'#{i:02x}0000', 'green': f'#00{i:02x}00', 'blue': f'#0000{i:02x}'}[color]
+                canvas.create_line(i, 0, i, 10, fill=c)
 
     def load_single_file(self):
         path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx"), ("CSV files", "*.csv")])
@@ -179,7 +223,7 @@ class MuadDataViewer:
                 pass
             self._single_colorbar = None
         if self.show_colorbar.get():
-            self._single_colorbar = self.single_figure.colorbar(im, ax=self.single_ax, fraction=0.046, pad=0.04, label="Intensity")
+            self._single_colorbar = self.single_figure.colorbar(im, ax=self.single_ax, fraction=0.046, pad=0.04, label="PPM")
         if self.show_scalebar.get():
             bar_length = self.scale_length.get() / self.pixel_size.get()
             x = 5
@@ -246,7 +290,18 @@ class MuadDataViewer:
                 composite.append(np.zeros(shape))
             else:
                 composite.append(get_scaled_matrix(ch))
-        rgb = np.stack(composite, axis=2)
+        # Now, instead of stacking as RGB, use the selected color for each channel
+        rgb = np.zeros((shape[0], shape[1], 3), dtype=float)
+        for idx, ch in enumerate('RGB'):
+            color_hex = self.rgb_colors[ch]
+            r = int(color_hex[1:3], 16) / 255.0
+            g = int(color_hex[3:5], 16) / 255.0
+            b = int(color_hex[5:7], 16) / 255.0
+            # Add the channel's scaled matrix times the color
+            rgb[..., 0] += composite[idx] * r
+            rgb[..., 1] += composite[idx] * g
+            rgb[..., 2] += composite[idx] * b
+        rgb = np.clip(rgb, 0, 1)
         rgb[np.isnan(rgb)] = 0
         black_mask = np.all(rgb == 0, axis=2)
         rgb[black_mask] = [0, 0, 0]
