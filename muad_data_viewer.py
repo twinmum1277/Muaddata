@@ -1,11 +1,113 @@
 # Muad'Data v17 - Fully Functional Element Viewer + RGB Overlay Tabs
 import tkinter as tk
-from tkinter import filedialog, ttk, messagebox, colorchooser
+from tkinter import filedialog, ttk, messagebox, colorchooser, simpledialog
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import os
+import re
+
+class MathExpressionDialog:
+    def __init__(self, parent, title="Enter Mathematical Expression"):
+        self.result = None
+        
+        # Create dialog window
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title(title)
+        self.dialog.geometry("500x300")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Center the dialog
+        self.dialog.geometry("+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
+        
+        # Build the dialog interface immediately
+        self.build_dialog()
+        
+        # Make dialog modal
+        self.dialog.focus_set()
+        self.dialog.wait_window()
+    
+    def build_dialog(self):
+        # Main frame
+        main_frame = tk.Frame(self.dialog, padx=20, pady=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Title
+        title_label = tk.Label(main_frame, text="Map Math - Mathematical Expression", font=("Arial", 14, "bold"))
+        title_label.pack(pady=(0, 20))
+        
+        # Instructions
+        instructions = tk.Label(main_frame, text="Enter a mathematical expression using 'x' as the variable.\nExample: x * 0.001 (to convert CPS to ppm)", 
+                              font=("Arial", 11), justify=tk.LEFT)
+        instructions.pack(pady=(0, 15))
+        
+        # Expression entry
+        tk.Label(main_frame, text="Expression:", font=("Arial", 12)).pack(anchor='w')
+        self.expression_entry = tk.Entry(main_frame, font=("Arial", 12), width=50)
+        self.expression_entry.pack(fill=tk.X, pady=(5, 15))
+        self.expression_entry.insert(0, "x * 0.001")
+        self.expression_entry.focus()
+        
+        # Common expressions frame
+        common_frame = tk.Frame(main_frame)
+        common_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        tk.Label(common_frame, text="Common expressions:", font=("Arial", 11, "bold")).pack(anchor='w')
+        
+        # Common expression buttons
+        common_expressions = [
+            ("Square root", "np.sqrt(x)"),
+            ("Log base 10", "np.log10(x)"),
+            ("Natural log", "np.log(x)"),
+            ("Square", "x ** 2")
+        ]
+        
+        for label, expr in common_expressions:
+            btn = tk.Button(common_frame, text=label, command=lambda e=expr: self.expression_entry.delete(0, tk.END) or self.expression_entry.insert(0, e),
+                           font=("Arial", 10))
+            btn.pack(side=tk.LEFT, padx=(0, 5), pady=2)
+        
+        # Buttons frame
+        button_frame = tk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(20, 0))
+        
+        # Apply button
+        apply_btn = tk.Button(button_frame, text="Apply Expression", command=self.apply_expression, 
+                             font=("Arial", 12, "bold"), bg="#4CAF50", fg="white", padx=20)
+        apply_btn.pack(side=tk.RIGHT, padx=(10, 0))
+        
+        # Cancel button
+        cancel_btn = tk.Button(button_frame, text="Cancel", command=self.cancel, 
+                              font=("Arial", 12), padx=20)
+        cancel_btn.pack(side=tk.RIGHT)
+        
+        # Bind Enter key to apply
+        self.expression_entry.bind("<Return>", lambda e: self.apply_expression())
+        self.expression_entry.bind("<Escape>", lambda e: self.cancel())
+        
+        # Bind window close button
+        self.dialog.protocol("WM_DELETE_WINDOW", self.cancel)
+    
+    def apply_expression(self):
+        expression = self.expression_entry.get().strip()
+        if not expression:
+            messagebox.showerror("Error", "Please enter a mathematical expression.")
+            return
+        
+        # Validate expression
+        try:
+            # Test with a sample value
+            x = 1.0
+            eval(expression, {"__builtins__": {}}, {"x": x, "np": np})
+            self.result = expression
+            self.dialog.destroy()
+        except Exception as e:
+            messagebox.showerror("Invalid Expression", f"The expression contains an error:\n{str(e)}\n\nPlease check your syntax.")
+    
+    def cancel(self):
+        self.dialog.destroy()
 
 class MuadDataViewer:
     def __init__(self, root):
@@ -25,6 +127,7 @@ class MuadDataViewer:
         self.single_file_label = None  # For displaying loaded file info
         self.single_file_name = None   # Store loaded file name
         self._single_colorbar = None   # Store the colorbar object for removal
+        self.original_matrix = None    # Store original matrix for math operations
 
         # RGB Overlay state
         self.rgb_data = {'R': None, 'G': None, 'B': None}
@@ -97,6 +200,13 @@ class MuadDataViewer:
         tk.Entry(control_frame, textvariable=self.scale_length, font=("Arial", 13)).pack(fill=tk.X)
 
         tk.Button(control_frame, text="View Map", command=self.view_single_map, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
+        
+        # Add Map Math button
+        tk.Button(control_frame, text="Map Math", command=self.open_map_math, font=("Arial", 13), bg="#FF8C00", fg="black", relief="raised", bd=2).pack(fill=tk.X, pady=(5, 2))
+        
+        # Add Reset to Original button
+        tk.Button(control_frame, text="Reset to Original", command=self.reset_to_original, font=("Arial", 13), bg="#4169E1", fg="black", relief="raised", bd=2).pack(fill=tk.X, pady=(2, 2))
+        
         tk.Button(control_frame, text="Save PNG", command=self.save_single_image, font=("Arial", 13)).pack(fill=tk.X)
 
         # Add a label at the bottom left to display loaded file info
@@ -118,32 +228,41 @@ class MuadDataViewer:
         self.file_root_label = tk.Label(control_frame, text="Dataset: None", font=("Arial", 13, "italic"))
         self.file_root_label.pack(pady=(0, 10))
 
-        color_names = {'R': 'Red', 'G': 'Green', 'B': 'Blue'}
+        # Channel mapping for cleaner labels
+        channel_labels = {'R': 'Channel 1', 'G': 'Channel 2', 'B': 'Channel 3'}
         default_colors = {'R': '#ff0000', 'G': '#00ff00', 'B': '#0000ff'}
 
         for ch in ['R', 'G', 'B']:
-            color = color_names[ch]
-            tk.Button(control_frame, text=f"Load {color} Channel", command=lambda c=ch: self.load_rgb_file(c), font=("Arial", 13)).pack(fill=tk.X, pady=(6, 2))
+            channel_label = channel_labels[ch]
+            tk.Button(control_frame, text=f"Load {channel_label}", command=lambda c=ch: self.load_rgb_file(c), font=("Arial", 13)).pack(fill=tk.X, pady=(6, 2))
             elem_label = tk.Label(control_frame, text=f"Loaded Element: None", font=("Arial", 13, "italic"))
             elem_label.pack()
-            # Color picker and gradient
+            
+            # Color picker with channel color as button background
             color_picker_frame = tk.Frame(control_frame)
             color_picker_frame.pack(fill=tk.X, padx=5, pady=2)
-            color_btn = tk.Button(color_picker_frame, text="Pick Color", bg=self.rgb_colors[ch], fg='white', font=("Arial", 10, "bold"),
+            color_btn = tk.Button(color_picker_frame, text=f"Color {ch}", bg=self.rgb_colors[ch], fg='white', font=("Arial", 10, "bold"),
                                   command=lambda c=ch: self.pick_channel_color(c))
             color_btn.pack(side=tk.LEFT, padx=(0, 5))
-            gradient_canvas = tk.Canvas(color_picker_frame, height=10, width=256)
+            
+            # Gradient preview
+            gradient_canvas = tk.Canvas(color_picker_frame, height=10, width=200)
             gradient_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.draw_gradient(gradient_canvas, self.rgb_colors[ch])
             self.rgb_color_buttons[ch] = color_btn
             self.rgb_gradient_canvases[ch] = gradient_canvas
 
-            max_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, label=f"{color} Max", font=("Arial", 13))
+            max_slider = tk.Scale(control_frame, from_=0, to=1, resolution=0.01, orient=tk.HORIZONTAL, label=f"{channel_label} Max", font=("Arial", 13))
             max_slider.set(1)
             max_slider.pack(fill=tk.X)
             max_slider.bind("<B1-Motion>", lambda e, c=ch: self.view_rgb_overlay())
             self.rgb_sliders[ch] = {'max': max_slider}
             self.rgb_labels[ch] = {'elem': elem_label}
+
+        # Add space for future color bar
+        tk.Label(control_frame, text="Color Scale", font=("Arial", 13)).pack(pady=(10, 0))
+        self.color_scale_canvas = tk.Canvas(control_frame, height=80, width=200, bg='white', relief='sunken', bd=1)
+        self.color_scale_canvas.pack(fill=tk.X, pady=(2, 10))
 
         tk.Checkbutton(control_frame, text="Normalize to 99th Percentile", variable=self.normalize_var, font=("Arial", 13)).pack(anchor='w', pady=(10, 5))
         tk.Button(control_frame, text="View Overlay", command=self.view_rgb_overlay, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
@@ -156,8 +275,9 @@ class MuadDataViewer:
 
     def pick_channel_color(self, channel):
         # Open color chooser and update color for the channel
+        channel_labels = {'R': 'Channel 1', 'G': 'Channel 2', 'B': 'Channel 3'}
         initial_color = self.rgb_colors[channel]
-        color_code = colorchooser.askcolor(title=f"Pick color for channel {channel}", color=initial_color)
+        color_code = colorchooser.askcolor(title=f"Pick color for {channel_labels[channel]}", color=initial_color)
         if color_code and color_code[1]:
             self.rgb_colors[channel] = color_code[1]
             # Update button color
@@ -166,6 +286,8 @@ class MuadDataViewer:
             self.draw_gradient(self.rgb_gradient_canvases[channel], color_code[1])
             # Update overlay if visible
             self.view_rgb_overlay()
+            # Update color scale
+            self.update_color_scale()
 
     def draw_gradient(self, canvas, color):
         # Accepts either a color name ('red', 'green', 'blue') or a hex color
@@ -227,6 +349,8 @@ class MuadDataViewer:
             df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(axis=1, how='all')
             mat = df.to_numpy()
             self.single_matrix = mat
+            # Store original matrix for math operations
+            self.original_matrix = np.array(mat, copy=True)
             # Update min/max values and sliders
             min_val = np.nanmin(mat)
             max_val = np.nanmax(mat)
@@ -240,15 +364,15 @@ class MuadDataViewer:
             self.max_constraint.set(int(max_val))
             # Update loaded file label
             self.single_file_name = os.path.basename(path)
-            self.single_file_label.config(text=f"Loaded file: {self.single_file_name}")
+            self.update_file_label()
             # Update histogram
             self.update_histogram()
             self.view_single_map()
         except Exception as e:
             error_msg = f"Failed to load matrix file:\n{e}\n\nFile path: {path}\nFile exists: {os.path.exists(path) if path else 'No path'}"
             messagebox.showerror("Error", error_msg)
-            self.single_file_label.config(text="Loaded file: None")
             self.single_file_name = None
+            self.update_file_label()
 
     def apply_max_constraint(self):
         """Apply the max constraint to limit the max slider value."""
@@ -351,6 +475,134 @@ class MuadDataViewer:
         # Add min/max indicators (always at left/right of canvas now)
         self.histogram_canvas.create_line(0, 0, 0, canvas_height, fill='red', width=2)
         self.histogram_canvas.create_line(canvas_width, 0, canvas_width, canvas_height, fill='blue', width=2)
+
+    def update_color_scale(self):
+        """Update the color scale based on loaded channels."""
+        # Clear the canvas
+        self.color_scale_canvas.delete("all")
+        
+        # Count loaded channels
+        loaded_channels = [ch for ch in ['R', 'G', 'B'] if self.rgb_data[ch] is not None]
+        num_channels = len(loaded_channels)
+        
+        if num_channels == 0:
+            # No channels loaded - show empty canvas
+            return
+        elif num_channels == 1:
+            # Single channel - show single color bar
+            ch = loaded_channels[0]
+            color = self.rgb_colors[ch]
+            self.color_scale_canvas.create_rectangle(10, 20, 190, 60, fill=color, outline='black')
+            self.color_scale_canvas.create_text(100, 70, text=f"Channel {ch}", font=("Arial", 10))
+            
+        elif num_channels == 2:
+            # Two channels - create linear gradient
+            ch1, ch2 = loaded_channels[0], loaded_channels[1]
+            color1 = self.rgb_colors[ch1]
+            color2 = self.rgb_colors[ch2]
+            
+            # Create gradient bar
+            bar_width = 180
+            bar_height = 40
+            x_start, y_start = 10, 20
+            
+            # Draw gradient by interpolating colors
+            for i in range(bar_width):
+                frac = i / (bar_width - 1)
+                # Interpolate between the two colors
+                r1, g1, b1 = int(color1[1:3], 16), int(color1[3:5], 16), int(color1[5:7], 16)
+                r2, g2, b2 = int(color2[1:3], 16), int(color2[3:5], 16), int(color2[5:7], 16)
+                
+                r = int(r1 * (1 - frac) + r2 * frac)
+                g = int(g1 * (1 - frac) + g2 * frac)
+                b = int(b1 * (1 - frac) + b2 * frac)
+                
+                gradient_color = f'#{r:02x}{g:02x}{b:02x}'
+                self.color_scale_canvas.create_line(x_start + i, y_start, x_start + i, y_start + bar_height, 
+                                                  fill=gradient_color, width=1)
+            
+            # Add labels
+            self.color_scale_canvas.create_text(10, 70, text=f"Ch{ch1}", font=("Arial", 8), anchor='w')
+            self.color_scale_canvas.create_text(190, 70, text=f"Ch{ch2}", font=("Arial", 8), anchor='e')
+            
+        elif num_channels == 3:
+            # Three channels - create triangular color space
+            ch1, ch2, ch3 = loaded_channels[0], loaded_channels[1], loaded_channels[2]
+            color1 = self.rgb_colors[ch1]
+            color2 = self.rgb_colors[ch2]
+            color3 = self.rgb_colors[ch3]
+            
+            # Create triangular color space
+            # Triangle vertices (equilateral triangle)
+            center_x, center_y = 100, 40
+            radius = 30
+            
+            # Draw triangle outline
+            points = [
+                center_x, center_y - radius,  # Top
+                center_x - radius * 0.866, center_y + radius * 0.5,  # Bottom left
+                center_x + radius * 0.866, center_y + radius * 0.5   # Bottom right
+            ]
+            self.color_scale_canvas.create_polygon(points, outline='black', width=2)
+            
+            # Fill triangle with interpolated colors
+            # Create a grid of points and interpolate colors
+            for y in range(int(center_y - radius), int(center_y + radius + 1), 2):
+                for x in range(int(center_x - radius), int(center_x + radius + 1), 2):
+                    # Check if point is inside triangle
+                    if self.point_in_triangle(x, y, points):
+                        # Calculate barycentric coordinates
+                        bary = self.barycentric_coords(x, y, points)
+                        if bary:
+                            # Interpolate colors using barycentric coordinates
+                            color = self.interpolate_colors([color1, color2, color3], bary)
+                            self.color_scale_canvas.create_oval(x-1, y-1, x+1, y+1, fill=color, outline='')
+            
+            # Add channel labels at vertices
+            self.color_scale_canvas.create_text(center_x, center_y - radius - 5, text=f"Ch{ch1}", font=("Arial", 8))
+            self.color_scale_canvas.create_text(center_x - radius * 0.866, center_y + radius * 0.5 + 10, text=f"Ch{ch2}", font=("Arial", 8))
+            self.color_scale_canvas.create_text(center_x + radius * 0.866, center_y + radius * 0.5 + 10, text=f"Ch{ch3}", font=("Arial", 8))
+
+    def point_in_triangle(self, x, y, triangle_points):
+        """Check if a point is inside a triangle."""
+        x1, y1, x2, y2, x3, y3 = triangle_points
+        
+        # Calculate barycentric coordinates
+        denominator = (y2 - y3) * (x1 - x3) + (x3 - x2) * (y1 - y3)
+        if denominator == 0:
+            return False
+            
+        u = ((x - x3) * (y2 - y3) - (y - y3) * (x2 - x3)) / denominator
+        v = ((x - x1) * (y3 - y1) - (y - y1) * (x3 - x1)) / denominator
+        w = 1 - u - v
+        
+        return u >= 0 and v >= 0 and w >= 0
+
+    def barycentric_coords(self, x, y, triangle_points):
+        """Calculate barycentric coordinates of a point relative to a triangle."""
+        x1, y1, x2, y2, x3, y3 = triangle_points
+        
+        denominator = (y2 - y3) * (x1 - x3) + (x3 - x2) * (y1 - y3)
+        if denominator == 0:
+            return None
+            
+        u = ((x - x3) * (y2 - y3) - (y - y3) * (x2 - x3)) / denominator
+        v = ((x - x1) * (y3 - y1) - (y - y1) * (x3 - x1)) / denominator
+        w = 1 - u - v
+        
+        return [u, v, w]
+
+    def interpolate_colors(self, colors, barycentric_coords):
+        """Interpolate colors using barycentric coordinates."""
+        r, g, b = 0, 0, 0
+        
+        for i, color in enumerate(colors):
+            weight = barycentric_coords[i]
+            r += int(color[1:3], 16) * weight
+            g += int(color[3:5], 16) * weight
+            b += int(color[5:7], 16) * weight
+        
+        return f'#{int(r):02x}{int(g):02x}{int(b):02x}'
 
     def update_histogram_and_view(self):
         """Update both histogram and the main view."""
@@ -470,6 +722,8 @@ class MuadDataViewer:
                 self.rgb_sliders[channel]['max'].config(from_=0, to=max_val)
                 self.rgb_sliders[channel]['max'].set(max_val)
             messagebox.showinfo("Loaded", f"{channel} channel loaded with shape {mat.shape}")
+            # Update color scale
+            self.update_color_scale()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load {channel} channel:\n{e}")
 
@@ -527,6 +781,162 @@ class MuadDataViewer:
         out_path = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG", "*.png")])
         if out_path:
             self.rgb_figure.savefig(out_path, dpi=300, bbox_inches='tight')
+
+    def open_map_math(self):
+        """Open the map math dialog and apply mathematical expressions to the loaded matrix."""
+        if self.single_matrix is None:
+            messagebox.showwarning("No Data", "Please load a matrix file first.")
+            return
+        
+        # Create and show the math expression dialog
+        dialog = MathExpressionDialog(self.root)
+        
+        if dialog.result:
+            try:
+                # Store original matrix if not already stored
+                if self.original_matrix is None:
+                    self.original_matrix = np.array(self.single_matrix, copy=True)
+                
+                # Create a copy of the current matrix for processing
+                mat = np.array(self.single_matrix, dtype=float)
+                
+                # Create a mask for non-empty cells (where there are actual values)
+                # We'll consider cells with values > 0 as non-empty
+                non_empty_mask = (mat > 0) & ~np.isnan(mat)
+                
+                # Apply the expression only to non-empty cells
+                result_mat = np.array(mat, copy=True)
+                
+                # For each non-empty cell, apply the expression
+                for i in range(mat.shape[0]):
+                    for j in range(mat.shape[1]):
+                        if non_empty_mask[i, j]:
+                            x = mat[i, j]
+                            try:
+                                # Safely evaluate the expression for this cell
+                                result = eval(dialog.result, {"__builtins__": {}}, {"x": x, "np": np})
+                                result_mat[i, j] = result
+                            except Exception as e:
+                                messagebox.showerror("Evaluation Error", f"Error evaluating expression for cell [{i},{j}]:\n{str(e)}")
+                                return
+                
+                # Update the current matrix with the result
+                self.single_matrix = result_mat
+                
+                # Update min/max values and sliders
+                min_val = np.nanmin(result_mat)
+                max_val = np.nanmax(result_mat)
+                self.single_min.set(min_val)
+                self.single_max.set(max_val)
+                self.min_slider.config(from_=min_val, to=max_val)
+                self.max_slider.config(from_=min_val, to=max_val)
+                self.min_slider.set(min_val)
+                self.max_slider.set(max_val)
+                
+                # Update max constraint
+                self.max_constraint.set(int(max_val))
+                
+                # Update histogram and view
+                self.update_histogram()
+                self.view_single_map()
+                
+                # Update file label to show modification status
+                self.update_file_label()
+                
+                # Ask user if they want to save the result
+                save_result = messagebox.askyesno("Save Result", 
+                                                "Expression applied successfully!\n\nWould you like to save the result to a file?")
+                
+                if save_result:
+                    self.save_math_result(result_mat, dialog.result)
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to apply expression:\n{str(e)}")
+    
+    def save_math_result(self, result_matrix, expression):
+        """Save the math result to a file with automatic naming."""
+        if self.single_file_name is None:
+            # Fallback if no original filename
+            default_name = "math_result.xlsx"
+        else:
+            # Create filename with _math suffix
+            name_without_ext = os.path.splitext(self.single_file_name)[0]
+            default_name = f"{name_without_ext}_math.xlsx"
+        
+        # Ask user for save location with pre-filled name
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[
+                ("Excel files", "*.xlsx"),
+                ("CSV files", "*.csv")
+            ],
+            initialfile=default_name
+        )
+        
+        if save_path:
+            try:
+                if save_path.endswith('.xlsx'):
+                    # Save as Excel
+                    df = pd.DataFrame(result_matrix)
+                    df.to_excel(save_path, header=False, index=False)
+                elif save_path.endswith('.csv'):
+                    # Save as CSV
+                    df = pd.DataFrame(result_matrix)
+                    df.to_csv(save_path, header=False, index=False)
+                
+                messagebox.showinfo("Saved", 
+                                  f"Math result saved successfully!\n\n"
+                                  f"File: {os.path.basename(save_path)}\n"
+                                  f"Expression: {expression}\n"
+                                  f"Matrix shape: {result_matrix.shape}")
+                
+            except Exception as e:
+                messagebox.showerror("Save Error", f"Failed to save the result:\n{str(e)}")
+    
+    def reset_to_original(self):
+        """Reset the current matrix to the original loaded matrix."""
+        if self.original_matrix is not None:
+            self.single_matrix = np.array(self.original_matrix, copy=True)
+            
+            # Update min/max values and sliders
+            min_val = np.nanmin(self.single_matrix)
+            max_val = np.nanmax(self.single_matrix)
+            self.single_min.set(min_val)
+            self.single_max.set(max_val)
+            self.min_slider.config(from_=min_val, to=max_val)
+            self.max_slider.config(from_=min_val, to=max_val)
+            self.min_slider.set(min_val)
+            self.max_slider.set(max_val)
+            
+            # Update max constraint
+            self.max_constraint.set(int(max_val))
+            
+            # Update histogram and view
+            self.update_histogram()
+            self.view_single_map()
+            
+            # Update file label
+            self.update_file_label()
+            
+            messagebox.showinfo("Reset", "Matrix reset to original values.")
+        else:
+            messagebox.showwarning("No Original", "No original matrix to reset to.")
+
+    def is_matrix_modified(self):
+        """Check if the current matrix has been modified from the original."""
+        if self.original_matrix is None or self.single_matrix is None:
+            return False
+        return not np.array_equal(self.single_matrix, self.original_matrix)
+    
+    def update_file_label(self):
+        """Update the file label to show current status."""
+        if self.single_file_name is None:
+            self.single_file_label.config(text="Loaded file: None")
+        else:
+            base_text = f"Loaded file: {self.single_file_name}"
+            if self.is_matrix_modified():
+                base_text += " (Modified)"
+            self.single_file_label.config(text=base_text)
 
 def main():
     root = tk.Tk()
