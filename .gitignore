@@ -1,0 +1,8 @@
+muaddata.egg-info/top_level.txt
+muaddata.egg-info/SOURCES.txt
+muaddata.egg-info/requires.txt
+muaddata.egg-info/PKG-INFO
+muaddata.egg-info/entry_points.txt
+muaddata.egg-info/dependency_links.txt
+build/lib/muaddata/muaddata.py
+build/lib/muaddata/__init__.py

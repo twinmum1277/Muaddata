@@ -35,6 +35,11 @@ class MuadDataViewer:
         self.file_root_label = None
         self.normalize_var = tk.IntVar()
 
+        # Responsive colorbar for RGB overlay
+        self.rgb_colorbar_figure = None
+        self.rgb_colorbar_ax = None
+        self.rgb_colorbar_canvas = None
+
         # Tabs
         self.tabs = ttk.Notebook(self.root)
         self.tabs.pack(fill=tk.BOTH, expand=True)
@@ -100,7 +105,7 @@ class MuadDataViewer:
         control_frame = tk.Frame(self.rgb_tab, padx=10, pady=10)
         control_frame.pack(side=tk.LEFT, fill=tk.Y)
 
-        display_frame = tk.Frame(self.rgb_tab)
+        display_frame = tk.Frame(self.rgb_tab, bg="black")
         display_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
         self.file_root_label = tk.Label(control_frame, text="Dataset: None", font=("Arial", 13, "italic"))
@@ -137,7 +142,18 @@ class MuadDataViewer:
         tk.Button(control_frame, text="View Overlay", command=self.view_rgb_overlay, font=("Arial", 13)).pack(fill=tk.X, pady=(10, 2))
         tk.Button(control_frame, text="Save RGB Image", command=self.save_rgb_image, font=("Arial", 13)).pack(fill=tk.X)
 
-        self.rgb_figure, self.rgb_ax = plt.subplots()
+        # Add responsive colorbar canvas for RGB overlay
+        colorbar_frame = tk.Frame(display_frame, bg="black")
+        colorbar_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(5, 0))
+        self.rgb_colorbar_figure, self.rgb_colorbar_ax = plt.subplots(figsize=(3, 1.2), dpi=100, facecolor='black')
+        self.rgb_colorbar_ax.set_facecolor('black')
+        self.rgb_colorbar_ax.axis('off')
+        self.rgb_colorbar_canvas = FigureCanvasTkAgg(self.rgb_colorbar_figure, master=colorbar_frame)
+        self.rgb_colorbar_canvas.get_tk_widget().configure(bg="black", highlightthickness=0, bd=0)
+        self.rgb_colorbar_canvas.get_tk_widget().pack(fill=tk.X, expand=True)
+
+        self.rgb_figure, self.rgb_ax = plt.subplots(facecolor='black')
+        self.rgb_ax.set_facecolor('black')
         self.rgb_ax.axis('off')
         self.rgb_canvas = FigureCanvasTkAgg(self.rgb_figure, master=display_frame)
         self.rgb_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
@@ -310,6 +326,106 @@ class MuadDataViewer:
         self.rgb_ax.axis('off')
         self.rgb_figure.tight_layout()
         self.rgb_canvas.draw()
+        # Draw responsive colorbar
+        self.draw_rgb_colorbar()
+
+    def draw_rgb_colorbar(self):
+        # Determine which channels are loaded
+        loaded = [ch for ch in 'RGB' if self.rgb_data[ch] is not None]
+        colors = [self.rgb_colors[ch] for ch in loaded]
+        labels = []
+        for ch in loaded:
+            label = self.rgb_labels[ch]['elem'].cget("text")
+            if label.startswith("Loaded Element: "):
+                label = label[len("Loaded Element: "):]
+            labels.append(label if label != "None" else ch)
+        self.rgb_colorbar_ax.clear()
+        self.rgb_colorbar_ax.axis('off')
+        if len(loaded) == 3:
+            # Draw a triangle with each vertex colored
+            triangle = np.zeros((120, 240, 3), dtype=float)
+            # Get RGB for each color
+            rgb_vals = []
+            for c in colors:
+                r = int(c[1:3], 16) / 255.0
+                g = int(c[3:5], 16) / 255.0
+                b = int(c[5:7], 16) / 255.0
+                rgb_vals.append([r, g, b])
+            # Triangle vertices
+            v0 = np.array([120, 10])   # left
+            v1 = np.array([230, 110])  # right
+            v2 = np.array([10, 110])   # bottom
+            # For each pixel, barycentric interpolation
+            for y in range(120):
+                for x in range(240):
+                    p = np.array([x, y])
+                    # Compute barycentric coordinates
+                    denom = ((v1[1] - v2[1])*(v0[0] - v2[0]) + (v2[0] - v1[0])*(v0[1] - v2[1]))
+                    if denom == 0:
+                        continue
+                    l1 = ((v1[1] - v2[1])*(p[0] - v2[0]) + (v2[0] - v1[0])*(p[1] - v2[1])) / denom
+                    l2 = ((v2[1] - v0[1])*(p[0] - v2[0]) + (v0[0] - v2[0])*(p[1] - v2[1])) / denom
+                    l3 = 1 - l1 - l2
+                    if (l1 >= 0) and (l2 >= 0) and (l3 >= 0):
+                        color = l1 * np.array(rgb_vals[0]) + l2 * np.array(rgb_vals[1]) + l3 * np.array(rgb_vals[2])
+                        triangle[y, x, :] = color
+            self.rgb_colorbar_ax.imshow(triangle, origin='upper', extent=[0, 1, 0, 1])
+            # Draw triangle outline
+            self.rgb_colorbar_ax.plot([v0[0]/240, v1[0]/240], [1-v0[1]/120, 1-v1[1]/120], color='k', lw=1)
+            self.rgb_colorbar_ax.plot([v1[0]/240, v2[0]/240], [1-v1[1]/120, 1-v2[1]/120], color='k', lw=1)
+            self.rgb_colorbar_ax.plot([v2[0]/240, v0[0]/240], [1-v2[1]/120, 1-v0[1]/120], color='k', lw=1)
+            # Place labels at vertices
+            self.rgb_colorbar_ax.text(v0[0]/240, 1-v0[1]/120-0.05, labels[0], color=colors[0], fontsize=10, ha='center', va='top', fontweight='bold')
+            self.rgb_colorbar_ax.text(v1[0]/240+0.04, 1-v1[1]/120, labels[1], color=colors[1], fontsize=10, ha='left', va='center', fontweight='bold')
+            self.rgb_colorbar_ax.text(v2[0]/240-0.04, 1-v2[1]/120, labels[2], color=colors[2], fontsize=10, ha='right', va='center', fontweight='bold')
+            self.rgb_colorbar_ax.set_xlim(0, 1)
+            self.rgb_colorbar_ax.set_ylim(0, 1)
+        elif len(loaded) == 2:
+            # Draw a horizontal gradient bar between the two colors
+            width = 240
+            height = 30
+            grad = np.zeros((height, width, 3), dtype=float)
+            rgb0 = [int(colors[0][1:3], 16)/255.0, int(colors[0][3:5], 16)/255.0, int(colors[0][5:7], 16)/255.0]
+            rgb1 = [int(colors[1][1:3], 16)/255.0, int(colors[1][3:5], 16)/255.0, int(colors[1][5:7], 16)/255.0]
+            for x in range(width):
+                frac = x / (width-1)
+                color = (1-frac)*np.array(rgb0) + frac*np.array(rgb1)
+                grad[:, x, :] = color
+            self.rgb_colorbar_ax.imshow(grad, origin='upper', extent=[0, 1, 0, 1])
+            # Draw bar outline
+            self.rgb_colorbar_ax.plot([0, 1], [0, 0], color='k', lw=1)
+            self.rgb_colorbar_ax.plot([0, 1], [1, 1], color='k', lw=1)
+            self.rgb_colorbar_ax.plot([0, 0], [0, 1], color='k', lw=1)
+            self.rgb_colorbar_ax.plot([1, 1], [0, 1], color='k', lw=1)
+            # Place labels at ends
+            self.rgb_colorbar_ax.text(0, 1.05, labels[0], color=colors[0], fontsize=10, ha='left', va='bottom', fontweight='bold')
+            self.rgb_colorbar_ax.text(1, 1.05, labels[1], color=colors[1], fontsize=10, ha='right', va='bottom', fontweight='bold')
+            self.rgb_colorbar_ax.set_xlim(0, 1)
+            self.rgb_colorbar_ax.set_ylim(0, 1)
+        elif len(loaded) == 1:
+            # Draw a single color bar
+            width = 240
+            height = 30
+            grad = np.zeros((height, width, 3), dtype=float)
+            rgb0 = [int(colors[0][1:3], 16)/255.0, int(colors[0][3:5], 16)/255.0, int(colors[0][5:7], 16)/255.0]
+            for x in range(width):
+                frac = x / (width-1)
+                color = frac*np.array(rgb0)
+                grad[:, x, :] = color
+            self.rgb_colorbar_ax.imshow(grad, origin='upper', extent=[0, 1, 0, 1])
+            self.rgb_colorbar_ax.plot([0, 1], [0, 0], color='k', lw=1)
+            self.rgb_colorbar_ax.plot([0, 1], [1, 1], color='k', lw=1)
+            self.rgb_colorbar_ax.plot([0, 0], [0, 1], color='k', lw=1)
+            self.rgb_colorbar_ax.plot([1, 1], [0, 1], color='k', lw=1)
+            self.rgb_colorbar_ax.text(1, 1.05, labels[0], color=colors[0], fontsize=10, ha='right', va='bottom', fontweight='bold')
+            self.rgb_colorbar_ax.set_xlim(0, 1)
+            self.rgb_colorbar_ax.set_ylim(0, 1)
+        else:
+            # No channels loaded, clear
+            self.rgb_colorbar_ax.set_xlim(0, 1)
+            self.rgb_colorbar_ax.set_ylim(0, 1)
+        self.rgb_colorbar_figure.tight_layout()
+        self.rgb_colorbar_canvas.draw()
 
     def save_rgb_image(self):
         if all(self.rgb_data[c] is None for c in 'RGB'):
